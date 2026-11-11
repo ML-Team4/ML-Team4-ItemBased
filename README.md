@@ -26,6 +26,18 @@ python -m item_based --gamma 0.5 --output outputs/demo_adjusted.csv
 
 ## 실제 데이터 연결
 
+데이터 경로는 프로젝트 루트의 `.env`에 설정합니다. 처음 설정할 때는 아래 명령으로 예제를 복사하고, `DATA_DIR`을 CSV 7개가 들어 있는 폴더로 변경합니다. 상대 경로는 프로젝트 루트 기준입니다.
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+DATA_DIR=data/raw
+```
+
+`.env`에는 파일 경로만 저장합니다. 실제 데이터는 `data/` 안에 보관하며, `.env`와 `data/`의 데이터 파일은 Git에서 제외됩니다. 팀원과 공유하는 `.env.example`에는 예시 경로만 포함합니다. 실제 데이터 로더에서 이 설정을 읽는 기능은 다음 단계에서 연결합니다.
+
 팀에서 추출한 ListenBrainz Parquet 파일은 `data/raw/`에 둡니다. 계획서의 원본 컬럼은 `user_id`, `listened_at`, `artist_name`, `recording_name`입니다.
 
 실제 데이터 연결 시 전처리 결과를 `(user_id, track_id, listen_count)` 형태로 변환해 `ItemBasedCF.fit()`에 전달합니다. 사용자 ID와 트랙 ID는 문자열을 사용합니다. 트랙 ID는 정규화된 아티스트명과 곡명의 조합으로 식별합니다. 세부 포맷은 팀의 전처리 결과에 맞춥니다.
