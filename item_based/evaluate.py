@@ -1,4 +1,4 @@
-"""공통 검증 사용자 전체의 Recall@10과 ARP를 계산한다."""
+"""공통 검증·테스트 사용자 전체의 Recall@10과 ARP를 계산한다."""
 
 import argparse
 import csv
@@ -12,18 +12,20 @@ from item_based.data import Dataset, load_dataset
 from item_based.model import ItemBasedCF
 
 
-def evaluate_validation(
+def evaluate_split(
     model: ItemBasedCF, dataset: Dataset, output_dir: Path,
-    gamma: float = 0.0, progress=None,
+    gamma: float = 0.0, progress=None, split_name: str = "validation",
 ) -> dict:
     if not 0 <= gamma <= 1:
         raise ValueError("gamma must be between 0 and 1")
-    split = dataset.validation
+    if split_name not in ("validation", "test"):
+        raise ValueError("split_name must be validation or test")
+    split = getattr(dataset, split_name)
     user_indices = split.user_indices
     if len(user_indices) == 0:
-        raise ValueError("검증 사용자가 없습니다.")
+        raise ValueError("평가 사용자가 없습니다.")
     if len(np.unique(user_indices)) != len(user_indices):
-        raise ValueError("검증 사용자가 중복됩니다.")
+        raise ValueError("평가 사용자가 중복됩니다.")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "summary.json"
@@ -45,7 +47,7 @@ def evaluate_validation(
             user_idx = int(user_idx)
             truth = set(split.targets.getrow(user_idx).indices.tolist())
             if not truth:
-                raise ValueError(f"사용자 {user_idx}: 검증 정답이 없습니다.")
+                raise ValueError(f"사용자 {user_idx}: 평가 정답이 없습니다.")
             recommendations = model.recommend_by_index(user_idx, top_n=10, gamma=gamma)
             item_indices = [item.item_idx for item in recommendations]
             if len(item_indices) != 10 or len(set(item_indices)) != 10:
@@ -75,7 +77,7 @@ def evaluate_validation(
     summary = {
         "algorithm": model.algorithm, "weighting": model.weighting,
         "scoring": "target-neighborhood weighted average",
-        "split": "validation", "top_n": 10, "gamma": gamma, "top_k": model.top_k,
+        "split": split_name, "top_n": 10, "gamma": gamma, "top_k": model.top_k,
         "batch_size": model.batch_size, "num_users": len(user_indices),
         "target_count": sum(split.targets.getrow(int(u)).nnz for u in user_indices),
         "recommendation_count": len(user_indices) * 10,
@@ -85,23 +87,69 @@ def evaluate_validation(
         "users_with_zero_score_recommendations": zero_score_users,
         "evaluation_seconds": monotonic() - started,
         "candidate_rule": "all train items minus original train history",
-        "aggregation": "mean of per-user metrics over all validation users",
+        "aggregation": f"mean of per-user metrics over all {split_name} users",
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return summary
 
 
+def evaluate_validation(model, dataset, output_dir, gamma=0.0, progress=None) -> dict:
+    return evaluate_split(model, dataset, output_dir, gamma, progress, "validation")
+
+
+def compare_test(model, dataset, output_dir, adjusted_gamma, progress=None) -> dict:
+    """검증에서 선택한 gamma를 고정하고 동일 모델로 테스트 보정 전후를 평가한다."""
+    if not 0 < adjusted_gamma <= 1:
+        raise ValueError("비교 gamma는 0보다 크고 1 이하여야 합니다.")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = output_dir / "comparison.json"
+    comparison_path.unlink(missing_ok=True)
+    print("테스트 보정 전 평가 (gamma=0)", flush=True)
+    baseline = evaluate_split(model, dataset, output_dir / "baseline", 0.0, progress, "test")
+    print(f"테스트 보정 후 평가 (gamma={adjusted_gamma:g})", flush=True)
+    adjusted = evaluate_split(model, dataset, output_dir / "adjusted", adjusted_gamma, progress, "test")
+    comparison = {
+        "split": "test", "top_k": model.top_k, "weighting": model.weighting,
+        "algorithm": model.algorithm, "adjusted_gamma": adjusted_gamma,
+        "baseline": baseline, "adjusted": adjusted,
+        "recall_change": adjusted["recall_at_10"] - baseline["recall_at_10"],
+        "arp_change": adjusted["arp"] - baseline["arp"],
+        "recall_retention": adjusted["recall_at_10"] / baseline["recall_at_10"]
+            if baseline["recall_at_10"] else None,
+        "arp_reduction": 1 - adjusted["arp"] / baseline["arp"] if baseline["arp"] else None,
+        "training_rule": "original train only; same fitted model for both evaluations",
+        "selection_rule": "K and gamma fixed before test evaluation",
+    }
+    comparison_path.write_text(json.dumps(comparison, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with (output_dir / "comparison.csv").open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["variant", "top_k", "gamma", "num_users", "recall_at_10", "arp"])
+        for label, result in (("baseline", baseline), ("adjusted", adjusted)):
+            writer.writerow([label, model.top_k, result["gamma"], result["num_users"],
+                             result["recall_at_10"], result["arp"]])
+    return comparison
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="전체 검증 사용자 Recall@10·ARP 평가")
+    parser = argparse.ArgumentParser(description="전체 검증·테스트 사용자 Recall@10·ARP 평가")
+    parser.add_argument("--split", choices=("validation", "test"), default="validation")
+    parser.add_argument("--compare-gamma", type=float, help="검증에서 고정한 gamma로 테스트 보정 전후 비교")
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--gamma", type=float, default=0.0)
     parser.add_argument("--weighting", choices=("raw", "log1p"), default="log1p")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/validation_k50_gamma0"))
+    parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.top_k < 1 or args.batch_size < 1 or not 0 <= args.gamma <= 1:
         parser.error("top-k·batch-size는 양수, gamma는 0~1이어야 합니다.")
+    if args.compare_gamma is not None:
+        if args.split != "test" or args.gamma != 0 or not 0 < args.compare_gamma <= 1:
+            parser.error("--compare-gamma는 --split test 및 --gamma 0에서 0 초과~1 이하로 지정하세요.")
+    if args.output_dir is None:
+        suffix = "_comparison" if args.compare_gamma is not None else f"_gamma{args.gamma:g}".replace(".", "")
+        args.output_dir = Path(f"outputs/{args.split}_k{args.top_k}{suffix}")
     try:
         dataset = load_dataset(args.data_dir)
         started = last_report = monotonic()
@@ -117,11 +165,20 @@ def main() -> None:
         model = ItemBasedCF(args.top_k, args.batch_size, progress=report, weighting=args.weighting)
         print("학습 시작 (최초 train만 사용)", flush=True)
         model.fit_matrix(dataset.counts)
-        print("전체 검증 사용자 평가 시작", flush=True)
-        summary = evaluate_validation(model, dataset, args.output_dir, args.gamma, report)
+        label = "검증" if args.split == "validation" else "테스트"
+        print(f"전체 {label} 사용자 평가 시작", flush=True)
+        if args.compare_gamma is not None:
+            comparison = compare_test(model, dataset, args.output_dir, args.compare_gamma, report)
+            for variant, result in (("보정 전", comparison["baseline"]), ("보정 후", comparison["adjusted"])):
+                print(f"{variant} (gamma={result['gamma']:g}): Recall@10={result['recall_at_10']:.6f}, "
+                      f"ARP={result['arp']:.6f}")
+            print(f"테스트 사용자: {comparison['baseline']['num_users']:,}명")
+            print(f"결과 저장 → {args.output_dir}")
+            return
+        summary = evaluate_split(model, dataset, args.output_dir, args.gamma, report, args.split)
     except (ValueError, OSError) as exc:
         parser.exit(1, f"평가 실패: {exc}\n")
-    print(f"검증 사용자: {summary['num_users']:,}명")
+    print(f"{label} 사용자: {summary['num_users']:,}명")
     print(f"Recall@10: {summary['recall_at_10']:.6f}")
     print(f"ARP: {summary['arp']:.6f}")
     print(f"결과 저장 → {args.output_dir}")

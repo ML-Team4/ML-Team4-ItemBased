@@ -102,7 +102,7 @@ python -m item_based --real-data --user-idx 0 --output outputs/lecture_user_0.cs
 
 출력 컬럼은 `user_idx`, `user_id`, `rank`, `item_idx`, `artist_name`, `recording_name`, `score`, `train_listener_count`입니다. 파일은 UTF-8 BOM CSV이며 이름의 쉼표·따옴표·개행을 CSV 규칙으로 저장합니다.
 
-`--batch-size`는 유사도 계산 블록 크기이며, 낮추면 블록 작업 공간을 줄일 수 있지만 최종 이웃 행렬의 크기는 줄지 않습니다. 최종 테스트 평가와 모델 저장·재사용은 후속 작업입니다.
+`--batch-size`는 유사도 계산 블록 크기이며, 낮추면 블록 작업 공간을 줄일 수 있지만 최종 이웃 행렬의 크기는 줄지 않습니다. 모델 저장·재사용은 후속 작업입니다. 테스트 비교 명령은 한 번 학습한 모델로 보정 전후를 평가합니다.
 
 ### 전체 데이터 계산과 메모리
 
@@ -144,7 +144,7 @@ python -m unittest discover -s tests -v
 | `score` | 해당 실행의 최종 점수 |
 | `popularity` | 학습 기간 고유 청취자 수 |
 
-실제 실험에서는 기본 모델과 인기도 보정 모델을 **Recall@10**과 **ARP**로 비교합니다. 검증 구간에서 설정을 선택하고, 테스트 구간에서 최종 평가합니다. 현재 전체 검증 사용자 평가까지 구현했으며, 설정 탐색과 최종 테스트는 후속 작업입니다.
+실제 실험에서는 기본 모델과 인기도 보정 모델을 **Recall@10**과 **ARP**로 비교합니다. 검증 구간에서 설정을 선택하고, 테스트 구간에서 최종 평가합니다. 검증·테스트 사용자 전체 평가를 지원합니다. 설정은 검증 데이터에서 선택하고, 고정한 설정으로 테스트 데이터를 평가합니다.
 
 ### 전체 검증 사용자 평가
 
@@ -183,3 +183,41 @@ python -m item_based.evaluate --top-k 50 --weighting log1p --gamma 0 \
 | 평가 시간 (학습 제외) | 4.3초 |
 
 사용자별 결과와 추천 CSV로 Recall@10·ARP를 독립 재계산해 일치함을 확인했습니다. 결과는 `outputs/validation_k50_gamma0/`에 저장했습니다. gamma=0의 보정 전 결과이며, 이후 검증 데이터로 K·gamma를 비교해 설정을 선택하고 최종 테스트를 진행합니다.
+
+## 최종 테스트 비교
+
+검증에서 비교한 결과는 다음과 같습니다. 모든 실험은 `weighting=log1p`를 사용했습니다.
+
+| K | gamma | Recall@10 | ARP |
+| --- | --- | ---: | ---: |
+| 20 | 0 | 0.015169 | 48.571979 |
+| 50 | 0 | 0.014352 | 53.644034 |
+| 100 | 0 | 0.012685 | 52.642198 |
+| 20 | 0.1 | 0.014673 | 37.321367 |
+| 20 | 0.25 | 0.013163 | 22.523789 |
+
+비교한 보정 전 설정에서 K=20의 Recall이 가장 높고 ARP가 가장 낮았습니다. gamma=0.1에서는 보정 전 대비 Recall이 약 3.3% 감소하고 ARP가 약 23.2% 감소했습니다. 최종 비교는 K=20·gamma=0.1을 고정하고, 같은 K의 보정 전 gamma=0과 수행합니다.
+
+```bash
+python -m item_based.evaluate \
+  --split test \
+  --top-k 20 \
+  --weighting log1p \
+  --compare-gamma 0.1 \
+  --output-dir outputs/test_k20
+```
+
+이 명령은 최초 train만으로 **한 번 학습**합니다. 같은 모델을 재사용해 테스트 사용자 3,852명에 대해 gamma=0과 gamma=0.1을 각각 평가합니다. validation을 학습에 합치지 않고, 후보에서 제외하는 곡도 원래 train 청취곡만 유지합니다. 테스트 결과로 K·gamma를 다시 선택하지 않습니다.
+
+| 출력 경로 (`outputs/test_k20/` 기준) | 내용 |
+| --- | --- |
+| `baseline/` | gamma=0의 summary.json, users.csv, recommendations.csv |
+| `adjusted/` | gamma=0.1의 summary.json, users.csv, recommendations.csv |
+| `comparison.csv` | 보정 전후 설정·Recall@10·ARP 비교 표 |
+| `comparison.json` | 두 평가 요약, Recall 유지 비율과 ARP 감소 비율 |
+
+비교 JSON의 `recall_change`·`arp_change`는 보정 후 값에서 보정 전 값을 뺀 절대 차이입니다. `recall_retention`은 보정 후 Recall / 보정 전 Recall, `arp_reduction`은 1 - 보정 후 ARP / 보정 전 ARP입니다. 분모가 0이면 해당 비율은 `null`입니다.
+
+단일 설정만 평가할 때는 `--split test --gamma 0.1`을 사용합니다. `--compare-gamma`는 테스트 비교에서만 지원하며 보정 전 `--gamma`는 0이어야 합니다. `--split`을 생략하면 기존처럼 validation을 평가합니다. `--output-dir`을 생략하면 split·K·gamma에 따라 경로를 생성합니다. 모델 저장 기능은 아직 없으므로 별도 명령을 다시 실행하면 재학습합니다.
+
+현재 단계에서는 테스트 평가 코드와 작은 데이터 검증만 완료했으며, 실제 데이터의 최종 테스트 수치는 위 명령 실행 후 생성됩니다.
