@@ -21,15 +21,21 @@ class IndexedRecommendation:
 
 
 class ItemBasedCF:
+    algorithm = "lecture-item-cf-v1"
+
     def __init__(
         self, top_k: int = 50, batch_size: int = 128,
         progress: Callable[[int, int], None] | None = None,
+        weighting: str = "log1p",
     ):
         if top_k < 1 or batch_size < 1:
             raise ValueError("top_k and batch_size must be positive")
         self.top_k = top_k
         self.batch_size = batch_size
         self.progress = progress
+        if weighting not in ("raw", "log1p"):
+            raise ValueError("weighting must be raw or log1p")
+        self.weighting = weighting
         self._history = None
 
     def fit(self, interactions: Iterable[tuple[str, str, float]]) -> None:
@@ -52,14 +58,17 @@ class ItemBasedCF:
             dtype=float,
         )
         popularity = history.getnnz(axis=0)
-        history.data = np.log1p(history.data)
+        if self.weighting == "log1p":
+            history.data = np.log1p(history.data)
         track_ids = np.asarray(list(track_indices))
         neighbors = self._build_neighbors(history, track_ids)
 
         self._user_indices = user_indices
         self._track_ids = track_ids
         self._popularity = popularity
-        self._neighbors = neighbors
+        self._similarity_sums = np.asarray(neighbors.sum(axis=1)).ravel()
+        # N[m, j]: 후보 m이 선택한 이웃 j. 예측 곱셈을 위해 N.T를 CSR로 보관한다.
+        self._neighbors = neighbors.T.tocsr()
         self._history = history
         self._uses_common_indices = False
 
@@ -75,13 +84,15 @@ class ItemBasedCF:
         popularity = history.getnnz(axis=0)
         if np.any(popularity == 0):
             raise ValueError("every catalog item must have a training listener")
-        history.data = np.log1p(history.data)
+        if self.weighting == "log1p":
+            history.data = np.log1p(history.data)
         track_ids = np.arange(history.shape[1])
         neighbors = self._build_neighbors(history, track_ids)
         self._user_indices = {i: i for i in range(history.shape[0])}
         self._track_ids = track_ids
         self._popularity = popularity
-        self._neighbors = neighbors
+        self._similarity_sums = np.asarray(neighbors.sum(axis=1)).ravel()
+        self._neighbors = neighbors.T.tocsr()
         self._history = history
         self._uses_common_indices = True
 
@@ -175,7 +186,10 @@ class ItemBasedCF:
         unseen = ~np.isin(scores.indices, history.indices)
         candidates = scores.indices[unseen]
         popularity = self._popularity[candidates]
-        adjusted = scores.data[unseen] / popularity.astype(float) ** gamma
+        # 강의 p.56: 후보별 Top-K 이웃 전체의 유사도 합으로 나눈 가중평균.
+        # 미청취 이웃은 R=0으로 분자에 기여하지 않지만 분모에는 포함된다.
+        base_scores = scores.data[unseen] / self._similarity_sums[candidates]
+        adjusted = base_scores / popularity.astype(float) ** gamma
         order = self._top_indices(adjusted, self._track_ids[candidates], top_n)
 
         return [

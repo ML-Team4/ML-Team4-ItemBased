@@ -4,10 +4,11 @@ ListenBrainz 청취 이력으로 사용자별 Top-10 곡을 추천하는 아이�
 
 ## 모델 구현
 
-1. 학습 데이터의 `(user_id, track_id, listen_count)`를 희소 사용자–트랙 행렬로 변환합니다. 같은 사용자와 곡 조합의 청취 횟수를 합친 뒤 `log1p`를 적용합니다.
-2. 곡별 청취 벡터 간 코사인 유사도를 배치 단위로 계산하고, 자기 자신을 제외한 유사한 곡을 최대 Top-K개씩 보관합니다.
-3. 사용자가 들은 각 곡의 `log1p(청취 횟수) × 이웃 유사도`를 후보 곡별로 합산합니다. 학습 기간에 이미 들은 곡을 제외하고 최대 10곡을 추천합니다.
-4. 곡의 인기도는 학습 기간에 그 곡을 들은 고유 사용자 수입니다. 보정 점수는 `기본 점수 / 인기도 ** gamma`입니다. `gamma=0`이면 기본 모델이고, `gamma`가 커질수록 인기곡의 점수가 더 많이 내려갑니다.
+1. 사용자–곡 학습 행렬을 만들고, 반복 청취의 영향을 완화하기 위해 `log1p(청취 횟수)`를 기본 입력으로 사용합니다. `weighting="raw"`를 지정하면 입력값을 변환 없이 사용합니다.
+2. 모든 사용자를 축으로 곡별 코사인 유사도를 계산합니다. **추천할 후보 곡을 기준으로** 자기 자신을 제외한 Top-K 이웃을 선택합니다.
+3. `sum(이웃 유사도 × 사용자 선호 강도) / sum(이웃 유사도)`의 **가중평균**을 계산합니다. 미관측 이웃 입력은 0이며, 분모는 후보 곡이 선택한 이웃 전체를 사용합니다.
+4. 인기도 보정을 위해 `예측 점수 / 고유 학습 청취자 수 ** gamma`를 적용합니다. gamma=0은 보정 전 모델입니다.
+5. 사용자의 원래 학습 청취곡을 제외하고 상위 10곡을 추천합니다. 0점 동률과 10곡 채우기는 공통 평가에 필요한 프로젝트 처리 규칙입니다.
 
 ## 실행 방법
 
@@ -22,7 +23,7 @@ python -m item_based --output outputs/demo_baseline.csv
 python -m item_based --gamma 0.5 --output outputs/demo_adjusted.csv
 ```
 
-명령은 내장된 예제 데이터를 사용합니다. `--top-k`는 곡마다 보관할 이웃 수이며 기본값은 50입니다. `--gamma`는 0부터 1까지 지정할 수 있습니다.
+명령은 내장된 예제 데이터를 사용합니다. `--weighting`의 기본값은 `log1p`이며, 입력값을 그대로 사용할 때는 `raw`를 지정합니다. `--top-k`는 곡마다 보관할 이웃 수이며 기본값은 50입니다. `--gamma`는 0부터 1까지 지정할 수 있습니다.
 
 ## 실제 데이터 연결
 
@@ -89,14 +90,14 @@ for recommendation in recommendations:
     print(recommendation.item_idx, item["recording_name"], recommendation.score)
 ```
 
-`fit_matrix()`는 공통 인덱스를 그대로 유지하고 원본 CSR을 복사해 float32 `log1p` 가중치를 적용합니다. 원시 청취 횟수 행렬은 바꾸지 않습니다. 인기도는 학습 행렬의 고유 청취자 수이며 로더에서 `items.csv`와 일치함을 검사합니다.
+`fit_matrix()`는 공통 인덱스를 그대로 유지하고 원본 CSR을 복사해 float32로 계산합니다. 기본 `weighting="log1p"`는 로그 변환을 적용하고, `weighting="raw"`는 입력값을 그대로 사용합니다. 원시 청취 횟수 행렬은 바꾸지 않습니다. 인기도는 학습 행렬의 고유 청취자 수이며 로더에서 `items.csv`와 일치함을 검사합니다.
 
 `recommend_by_index()`의 반환값은 `item_idx`, `score`, `popularity`입니다. 양의 점수 내림차순, 동점이면 숫자 `item_idx` 오름차순으로 추천합니다. 학습 청취곡은 제외하고, 양의 점수 후보가 부족하면 나머지 전체 카탈로그의 0점 후보를 같은 인덱스 순서로 채웁니다. 후보가 10개 이상이면 서로 다른 10곡을 반환합니다. 예제용 기존 `fit()`·`recommend()` 인터페이스도 유지합니다.
 
 전체 데이터를 학습하고 사용자 한 명의 추천 CSV를 저장하는 명령은 다음과 같습니다. 실행할 때마다 전체 모델을 새로 학습하며, `--user-idx`는 추천 대상만 선택합니다.
 
 ```bash
-python -m item_based --real-data --user-idx 0 --output outputs/baseline_user_0.csv
+python -m item_based --real-data --user-idx 0 --output outputs/lecture_user_0.csv
 ```
 
 출력 컬럼은 `user_idx`, `user_id`, `rank`, `item_idx`, `artist_name`, `recording_name`, `score`, `train_listener_count`입니다. 파일은 UTF-8 BOM CSV이며 이름의 쉼표·따옴표·개행을 CSV 규칙으로 저장합니다.
@@ -114,10 +115,10 @@ python -m item_based --real-data --user-idx 0 --output outputs/baseline_user_0.c
 ```bash
 .venv/bin/python -m item_based --real-data \
   --top-k 50 --batch-size 128 --user-idx 0 \
-  --output outputs/baseline_user_0.csv
+  --output outputs/lecture_user_0.csv
 ```
 
-추천 CSV 옆의 `baseline_user_0_metrics.json`에는 데이터 크기, K, 배치 크기, gamma, 학습 시간, 이웃 수, 이웃 CSR 바이트 수, 프로세스 최대 RSS 바이트 수와 추천 개수를 저장합니다. 이 파일도 `outputs/` 아래에서 Git 게시 대상에서 제외됩니다. 정확도 평가는 별도 단계이며 학습 완료나 메모리 측정만으로 추천 품질을 판단하지 않습니다.
+추천 CSV 옆의 `lecture_user_0_metrics.json`에는 데이터 크기, K, 배치 크기, gamma, 학습 시간, 이웃 수, 이웃 CSR 바이트 수, 프로세스 최대 RSS 바이트 수와 추천 개수를 저장합니다. 이 파일도 `outputs/` 아래에서 Git 게시 대상에서 제외됩니다. 정확도 평가는 별도 단계이며 학습 완료나 메모리 측정만으로 추천 품질을 판단하지 않습니다.
 
 회귀 검증은 다음 명령으로 실행합니다. 상위 K의 경계 동률, 작은 행렬의 직접 코사인 계산과의 일치, CSV 저장 및 원본 입력 보존을 검사합니다.
 
@@ -148,8 +149,8 @@ python -m unittest discover -s tests -v
 ### 전체 검증 사용자 평가
 
 ```bash
-python -m item_based.evaluate --top-k 50 --gamma 0 \
-  --output-dir outputs/validation_baseline
+python -m item_based.evaluate --top-k 50 --weighting log1p --gamma 0 \
+  --output-dir outputs/lecture_log_validation_baseline
 ```
 
 `.env`의 `DATA_DIR` 또는 `--data-dir`을 사용합니다. 매 실행마다 최초 train만으로 모델을 학습하고, `validation_users.csv`의 전체 사용자와 `validation_targets.csv`의 정답을 사용합니다. 테스트 정답은 설정 선택에 사용하지 않습니다. 사용자별 추천 후보는 전체 train 카탈로그에서 해당 사용자의 원래 train 청취곡만 제외한 집합입니다.
@@ -160,7 +161,7 @@ python -m item_based.evaluate --top-k 50 --gamma 0 \
 
 | 결과 파일 | 내용 |
 | --- | --- |
-| `summary.json` | 전체 사용자 수, Recall@10, ARP, K·gamma, 평가 시간, 0점 추천 규모 |
+| `summary.json` | 알고리즘 버전·입력 가중치, 전체 사용자 수, Recall@10, ARP, K·gamma, 평가 시간, 0점 추천 규모 |
 | `users.csv` | 사용자별 정답 수, 적중 수, Recall@10, ARP, 0점 추천 수 |
 | `recommendations.csv` | 사용자별 10곡의 공통 곡 인덱스, 순위, 점수와 학습 인기도 |
 
@@ -168,34 +169,17 @@ python -m item_based.evaluate --top-k 50 --gamma 0 \
 
 원본과 전처리 데이터는 `data/`에, 실험 결과는 `outputs/`에 둡니다. 데이터 파일과 실험 결과는 Git에서 제외합니다.
 
-## 전체 학습 실행 확인
+## 검증 결과
 
-2026-11-11, macOS arm64 / Python 3.14.0 / NumPy 2.5.4 / SciPy 1.18.1 환경에서 공통 데이터 전체를 실행했습니다. K=50, batch_size=128, gamma=0이며 사용자 0번의 추천을 저장했습니다.
-
-| 항목 | 실측값 |
-| --- | ---: |
-| 전체 학습곡 | 1,525,005 |
-| 학습 시간 | 165.8초 |
-| 저장된 이웃 | 76,124,711개 |
-| 이웃 CSR의 배열 바이트 합 | 586.6 MiB |
-| OS가 보고한 프로세스 최대 RSS | 564.6 MiB |
-| 사용자 0번 추천 | 중복 없는 10곡, 원래 학습 청취곡 제외 확인 |
-
-CSR 바이트 합은 배열의 논리적 크기이고 RSS는 OS가 보고한 상주 메모리 측정값이므로 서로 다른 지표입니다. 실행 시간과 RSS는 환경에 따라 달라집니다. 측정 파일은 `outputs/baseline_user_0_metrics.json`, 추천 파일은 `outputs/baseline_user_0.csv`입니다. 이 실행은 학습·추론 가능성을 확인한 기록입니다. 전체 검증 사용자 성능은 별도의 검증 평가로 계산하며 최종 테스트는 설정 확정 후 진행합니다.
-
-## 기본 모델 검증 결과
-
-2026-11-11, K=50·gamma=0으로 최초 train만 학습하고 공통 검증 사용자 전원을 평가했습니다. 사용자별 Recall@10과 ARP의 평균이며, 저장 CSV와 정답 파일로 지표를 독립 재계산해 일치함을 확인했습니다.
+입력에 `log1p(청취 횟수)`를 적용하고, 코사인 유사도로 후보 곡의 Top-K 이웃을 선택한 뒤 가중평균 점수를 계산했습니다. K=50·gamma=0으로 학습하고, 검증 사용자 3,922명에게 각각 10곡을 추천했습니다.
 
 | 항목 | 결과 |
 | --- | ---: |
+| Recall@10 | 0.014352 |
+| ARP | 53.644034 |
 | 평가 사용자 | 3,922명 |
-| 정답 쌍 | 193,323개 |
 | 추천 | 39,220개 |
-| Recall@10 | 0.007052 |
-| ARP | 12.066191 |
-| 0점 추천 | 69개 |
-| 0점 추천을 포함한 사용자 | 7명 |
-| 평가 시간 (학습 제외) | 8.1초 |
+| 0점 추천 | 275개 |
+| 평가 시간 (학습 제외) | 4.3초 |
 
-결과는 `outputs/validation_baseline/`에 있습니다. 낮은 Recall과 0점 추천 규모를 함께 해석해야 합니다. 이 값은 보정 전 기준 성능이며 인기도 보정의 개선 효과를 보여주는 결과가 아닙니다. 다음 단계에서 검증 데이터로 K·gamma를 비교하고 설정을 확정한 뒤 최종 테스트를 진행합니다.
+사용자별 결과와 추천 CSV로 Recall@10·ARP를 독립 재계산해 일치함을 확인했습니다. 결과는 `outputs/lecture_log_validation_baseline/`에 저장했습니다. gamma=0의 보정 전 결과이며, 이후 검증 데이터로 K·gamma를 비교해 설정을 선택하고 최종 테스트를 진행합니다.

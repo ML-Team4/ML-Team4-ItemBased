@@ -73,6 +73,8 @@ def evaluate_validation(
             if progress is not None:
                 progress(position, len(user_indices))
     summary = {
+        "algorithm": model.algorithm, "weighting": model.weighting,
+        "scoring": "target-neighborhood weighted average",
         "split": "validation", "top_n": 10, "gamma": gamma, "top_k": model.top_k,
         "batch_size": model.batch_size, "num_users": len(user_indices),
         "target_count": sum(split.targets.getrow(int(u)).nnz for u in user_indices),
@@ -95,7 +97,8 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--gamma", type=float, default=0.0)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/validation_baseline"))
+    parser.add_argument("--weighting", choices=("raw", "log1p"), default="log1p")
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/lecture_log_validation_baseline"))
     args = parser.parse_args()
     if args.top_k < 1 or args.batch_size < 1 or not 0 <= args.gamma <= 1:
         parser.error("top-k·batch-size는 양수, gamma는 0~1이어야 합니다.")
@@ -111,7 +114,7 @@ def main() -> None:
                       f"경과 {now - started:.1f}초", flush=True)
                 last_report = now
 
-        model = ItemBasedCF(args.top_k, args.batch_size, progress=report)
+        model = ItemBasedCF(args.top_k, args.batch_size, progress=report, weighting=args.weighting)
         print("학습 시작 (최초 train만 사용)", flush=True)
         model.fit_matrix(dataset.counts)
         print("전체 검증 사용자 평가 시작", flush=True)

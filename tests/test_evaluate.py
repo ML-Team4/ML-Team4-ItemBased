@@ -14,6 +14,8 @@ from item_based.model import IndexedRecommendation
 
 
 class FixedModel:
+    algorithm = "lecture-item-cf-v1"
+    weighting = "raw"
     top_k = 50
     batch_size = 128
 

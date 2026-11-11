@@ -26,7 +26,8 @@ def run_real_data(args, parser) -> None:
                       f"경과 {now - started:.1f}초", flush=True)
                 last_report = now
 
-        model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size, progress=report)
+        model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size, progress=report,
+                            weighting=args.weighting)
         print(f"실제 데이터 학습 시작: {dataset.counts.shape}, top_k={args.top_k}", flush=True)
         model.fit_matrix(dataset.counts)
         elapsed = monotonic() - started
@@ -40,7 +41,7 @@ def run_real_data(args, parser) -> None:
     except (ValueError, OSError) as exc:
         parser.exit(1, f"실행 실패: {exc}\n")
 
-    output = args.output or Path("outputs/recommendations.csv")
+    output = args.output or Path("outputs/lecture_recommendations.csv")
     output.parent.mkdir(parents=True, exist_ok=True)
     user_id = int(dataset.users.iloc[args.user_idx]["user_id"])
     with output.open("w", encoding="utf-8-sig", newline="") as file:
@@ -58,6 +59,8 @@ def run_real_data(args, parser) -> None:
             ])
     print(f"사용자 {args.user_idx}: 추천 {len(recommendations)}곡 저장 → {output}")
     metrics = {
+        "algorithm": model.algorithm, "weighting": model.weighting,
+        "scoring": "target-neighborhood weighted average",
         "num_users": dataset.counts.shape[0], "num_items": dataset.counts.shape[1],
         "top_k": args.top_k, "batch_size": args.batch_size, "gamma": args.gamma,
         "training_seconds": elapsed, "neighbor_count": neighbors.nnz,
@@ -86,6 +89,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--gamma", type=float, default=0.0)
+    parser.add_argument("--weighting", choices=("raw", "log1p"), default="log1p")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.top_k < 1 or args.batch_size < 1 or not 0 <= args.gamma <= 1:
@@ -110,7 +114,7 @@ def main() -> None:
     user_id = "user_1"
     # A later listen by user_1, held out from the training interactions.
     relevant_tracks = {"track_b"}
-    model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size)
+    model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size, weighting=args.weighting)
     model.fit(interactions)
     recommendations = model.recommend(user_id, gamma=args.gamma)
 
