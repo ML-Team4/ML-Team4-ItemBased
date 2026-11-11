@@ -13,6 +13,13 @@ class Recommendation:
     popularity: int
 
 
+@dataclass(frozen=True)
+class IndexedRecommendation:
+    item_idx: int
+    score: float
+    popularity: int
+
+
 class ItemBasedCF:
     def __init__(self, top_k: int = 50, batch_size: int = 128):
         if top_k < 1 or batch_size < 1:
@@ -50,6 +57,51 @@ class ItemBasedCF:
         self._popularity = popularity
         self._neighbors = neighbors
         self._history = history
+        self._uses_common_indices = False
+
+    def fit_matrix(self, counts: csr_matrix) -> None:
+        """학습 CSR의 행·열 번호를 공통 user_idx·item_idx로 유지한다."""
+        if not isinstance(counts, csr_matrix) or min(counts.shape) < 1:
+            raise ValueError("counts must be a nonempty CSR matrix")
+        history = counts.astype(np.float32, copy=True)
+        history.sum_duplicates()
+        history.eliminate_zeros()
+        if history.nnz == 0 or not np.all(np.isfinite(history.data)) or np.any(history.data <= 0):
+            raise ValueError("listen_count must be finite and positive")
+        popularity = history.getnnz(axis=0)
+        if np.any(popularity == 0):
+            raise ValueError("every catalog item must have a training listener")
+        history.data = np.log1p(history.data)
+        track_ids = np.arange(history.shape[1])
+        neighbors = self._build_neighbors(history, track_ids)
+        self._user_indices = {i: i for i in range(history.shape[0])}
+        self._track_ids = track_ids
+        self._popularity = popularity
+        self._neighbors = neighbors
+        self._history = history
+        self._uses_common_indices = True
+
+    def recommend_by_index(
+        self, user_idx: int, top_n: int = 10, gamma: float = 0.0
+    ) -> list[IndexedRecommendation]:
+        """공통 인덱스로 추천하며, 0점 동률은 item_idx 오름차순으로 채운다."""
+        if self._history is None or not self._uses_common_indices:
+            raise RuntimeError("fit_matrix must be called before recommend_by_index")
+        if not isinstance(user_idx, (int, np.integer)) or not 0 <= user_idx < self._history.shape[0]:
+            raise ValueError("user_idx is outside the common user index range")
+        recommendations = [
+            IndexedRecommendation(int(item.track_id), item.score, item.popularity)
+            for item in self.recommend(user_idx, top_n, gamma)
+        ]
+        if len(recommendations) < top_n:
+            available = np.ones(self._history.shape[1], dtype=bool)
+            available[self._history.getrow(user_idx).indices] = False
+            available[[item.item_idx for item in recommendations]] = False
+            for item_idx in np.flatnonzero(available)[:top_n - len(recommendations)]:
+                recommendations.append(IndexedRecommendation(
+                    int(item_idx), 0.0, int(self._popularity[item_idx])
+                ))
+        return recommendations
 
     def _build_neighbors(self, history: csr_matrix, track_ids: np.ndarray) -> csr_matrix:
         item_vectors = history.T.tocsr()
@@ -77,7 +129,7 @@ class ItemBasedCF:
         return csr_matrix((values, indices, indptr), shape=(num_tracks, num_tracks))
 
     def recommend(
-        self, user_id: str, top_n: int = 10, gamma: float = 0.0
+        self, user_id: str | int, top_n: int = 10, gamma: float = 0.0
     ) -> list[Recommendation]:
         if self._history is None:
             raise RuntimeError("fit must be called before recommend")

@@ -72,7 +72,36 @@ python -m item_based.data --data-dir data/
 
 코드에서는 `from item_based.data import load_dataset` 후 `load_dataset()`으로 불러옵니다. 반환값의 `counts`는 사용자 행 × 곡 열의 희소 행렬이고, `users`와 `items`의 행 번호는 공통 인덱스입니다. `validation`·`test`는 각각 `user_indices`와 정답 희소 행렬 `targets`를 제공합니다.
 
-현재 단계는 데이터 로딩과 검증까지입니다. 기존 `python -m item_based` 명령은 예제 데이터를 계속 사용하며, 실제 데이터 모델 학습과 평가는 다음 단계에서 연결합니다.
+기존 `python -m item_based` 명령은 예제 데이터를 사용합니다. 실제 데이터는 `--real-data`를 지정해야 학습합니다.
+
+### 공통 학습 행렬과 모델 연결
+
+```python
+from item_based.data import load_dataset
+from item_based.model import ItemBasedCF
+
+dataset = load_dataset()
+model = ItemBasedCF(top_k=50, batch_size=128)
+model.fit_matrix(dataset.counts)
+recommendations = model.recommend_by_index(user_idx=0, top_n=10, gamma=0.0)
+for recommendation in recommendations:
+    item = dataset.items.iloc[recommendation.item_idx]
+    print(recommendation.item_idx, item["recording_name"], recommendation.score)
+```
+
+`fit_matrix()`는 공통 인덱스를 그대로 유지하고 원본 CSR을 복사해 float32 `log1p` 가중치를 적용합니다. 원시 청취 횟수 행렬은 바꾸지 않습니다. 인기도는 학습 행렬의 고유 청취자 수이며 로더에서 `items.csv`와 일치함을 검사합니다.
+
+`recommend_by_index()`의 반환값은 `item_idx`, `score`, `popularity`입니다. 양의 점수 내림차순, 동점이면 숫자 `item_idx` 오름차순으로 추천합니다. 학습 청취곡은 제외하고, 양의 점수 후보가 부족하면 나머지 전체 카탈로그의 0점 후보를 같은 인덱스 순서로 채웁니다. 후보가 10개 이상이면 서로 다른 10곡을 반환합니다. 예제용 기존 `fit()`·`recommend()` 인터페이스도 유지합니다.
+
+전체 데이터를 학습하고 사용자 한 명의 추천 CSV를 저장하는 명령은 다음과 같습니다. 실행할 때마다 전체 모델을 새로 학습하며, `--user-idx`는 추천 대상만 선택합니다.
+
+```bash
+python -m item_based --real-data --user-idx 0 --output outputs/baseline_user_0.csv
+```
+
+출력 컬럼은 `user_idx`, `user_id`, `rank`, `item_idx`, `artist_name`, `recording_name`, `score`, `train_listener_count`입니다. 파일은 UTF-8 BOM CSV이며 이름의 쉼표·따옴표·개행을 CSV 규칙으로 저장합니다.
+
+현재 검증 범위는 작은 데이터의 학습→추천→CSV 저장과 기존 예제 실행입니다. 실제 152만 곡 전체 학습의 메모리·시간 점검은 다음 단계입니다. `--batch-size`는 유사도 계산 블록 크기이며, 낮추면 블록 작업 공간을 줄일 수 있지만 최종 이웃 행렬의 크기는 줄지 않습니다. 전체 평가와 모델 저장·재사용은 후속 작업입니다.
 
 | 구간 | 날짜 (2026년, 양끝 포함) | 용도 |
 | --- | --- | --- |

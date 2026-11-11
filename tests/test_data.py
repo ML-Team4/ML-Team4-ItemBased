@@ -1,4 +1,6 @@
 import csv
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +59,21 @@ class DatasetTests(unittest.TestCase):
         self.write_train()
         with self.assertRaisesRegex(ValueError, "고유 청취자 수"):
             load_dataset(self.root)
+
+    def test_real_data_command_exports_common_indices_and_names(self):
+        output = self.root / "recommendations.csv"
+        subprocess.run([
+            sys.executable, "-m", "item_based", "--real-data",
+            "--data-dir", str(self.root), "--user-idx", "1", "--output", str(output),
+        ], check=True, capture_output=True, text=True,
+            cwd=Path(__file__).resolve().parents[1])
+        with output.open(encoding="utf-8-sig", newline="") as file:
+            rows = list(csv.DictReader(file))
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(len({row["item_idx"] for row in rows}), 10)
+        self.assertTrue(all(row["user_id"] == "200" for row in rows))
+        self.assertTrue(all(row["item_idx"] != "0" for row in rows))
+        self.assertEqual(rows[0]["recording_name"], 'NULL,\n"곡"')
 
 
 if __name__ == "__main__":
