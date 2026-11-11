@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from math import isfinite
 
@@ -21,11 +21,15 @@ class IndexedRecommendation:
 
 
 class ItemBasedCF:
-    def __init__(self, top_k: int = 50, batch_size: int = 128):
+    def __init__(
+        self, top_k: int = 50, batch_size: int = 128,
+        progress: Callable[[int, int], None] | None = None,
+    ):
         if top_k < 1 or batch_size < 1:
             raise ValueError("top_k and batch_size must be positive")
         self.top_k = top_k
         self.batch_size = batch_size
+        self.progress = progress
         self._history = None
 
     def fit(self, interactions: Iterable[tuple[str, str, float]]) -> None:
@@ -109,7 +113,13 @@ class ItemBasedCF:
         normalized = item_vectors.multiply(1 / norms[:, None]).tocsr()
         normalized_transpose = normalized.T.tocsr()
         num_tracks = normalized.shape[0]
-        indptr, indices, values = [0], [], []
+        # Python 숫자 객체 목록 대신 고정 크기 NumPy 버퍼에 상위 이웃만 저장한다.
+        capacity = num_tracks * min(self.top_k, max(0, num_tracks - 1))
+        index_dtype = np.int32 if max(capacity, num_tracks) <= np.iinfo(np.int32).max else np.int64
+        indptr = np.zeros(num_tracks + 1, dtype=index_dtype)
+        indices = np.empty(capacity, dtype=index_dtype)
+        values = np.empty(capacity, dtype=history.dtype)
+        cursor = 0
 
         for start in range(0, num_tracks, self.batch_size):
             block = normalized[start : start + self.batch_size] @ normalized_transpose
@@ -121,12 +131,34 @@ class ItemBasedCF:
                 candidates = candidates[other_tracks]
                 similarities = similarities[other_tracks]
 
-                order = np.lexsort((track_ids[candidates], -similarities))[:self.top_k]
-                indices.extend(candidates[order])
-                values.extend(similarities[order])
-                indptr.append(len(indices))
+                order = self._top_indices(similarities, track_ids[candidates], self.top_k)
+                end = cursor + len(order)
+                indices[cursor:end] = candidates[order]
+                values[cursor:end] = similarities[order]
+                cursor = end
+                indptr[start + offset + 1] = cursor
+            if self.progress is not None:
+                self.progress(min(start + self.batch_size, num_tracks), num_tracks)
 
-        return csr_matrix((values, indices, indptr), shape=(num_tracks, num_tracks))
+        return csr_matrix(
+            (values[:cursor], indices[:cursor], indptr),
+            shape=(num_tracks, num_tracks), copy=False,
+        )
+
+    @staticmethod
+    def _top_indices(scores: np.ndarray, ids: np.ndarray, limit: int) -> np.ndarray:
+        """경계 점수의 동률까지 고려해 전체 정렬과 같은 상위 K를 선택한다."""
+        if len(scores) <= limit:
+            return np.lexsort((ids, -scores))
+        threshold = np.partition(scores, len(scores) - limit)[len(scores) - limit]
+        higher = np.flatnonzero(scores > threshold)
+        tied = np.flatnonzero(scores == threshold)
+        remaining = limit - len(higher)
+        if len(tied) > remaining:
+            chosen = np.argpartition(ids[tied], remaining - 1)[:remaining]
+            tied = tied[chosen]
+        selected = np.concatenate((higher, tied))
+        return selected[np.lexsort((ids[selected], -scores[selected]))]
 
     def recommend(
         self, user_id: str | int, top_n: int = 10, gamma: float = 0.0
@@ -144,7 +176,7 @@ class ItemBasedCF:
         candidates = scores.indices[unseen]
         popularity = self._popularity[candidates]
         adjusted = scores.data[unseen] / popularity.astype(float) ** gamma
-        order = np.lexsort((self._track_ids[candidates], -adjusted))[:top_n]
+        order = self._top_indices(adjusted, self._track_ids[candidates], top_n)
 
         return [
             Recommendation(

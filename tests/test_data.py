@@ -1,4 +1,5 @@
 import csv
+import json
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,10 @@ class DatasetTests(unittest.TestCase):
         self.assertTrue(all(row["user_id"] == "200" for row in rows))
         self.assertTrue(all(row["item_idx"] != "0" for row in rows))
         self.assertEqual(rows[0]["recording_name"], 'NULL,\n"곡"')
+        metrics = json.loads(output.with_name("recommendations_metrics.json").read_text())
+        self.assertEqual(metrics["num_items"], 12)
+        self.assertEqual(metrics["recommendation_count"], 10)
+        self.assertGreater(metrics["neighbor_csr_bytes"], 0)
 
 
 if __name__ == "__main__":

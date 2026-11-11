@@ -1,7 +1,10 @@
 import argparse
 import csv
+import json
+import sys
 from pathlib import Path
 from statistics import mean
+from time import monotonic
 
 
 def run_real_data(args, parser) -> None:
@@ -12,9 +15,27 @@ def run_real_data(args, parser) -> None:
         dataset = load_dataset(args.data_dir)
         if not 0 <= args.user_idx < dataset.counts.shape[0]:
             raise ValueError("--user-idx가 공통 사용자 인덱스 범위를 벗어났습니다.")
-        model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size)
+        started = monotonic()
+        last_report = started
+
+        def report(done, total):
+            nonlocal last_report
+            now = monotonic()
+            if now - last_report >= 10 or done == total:
+                print(f"이웃 계산: {done:,}/{total:,}곡 ({done / total:.1%}), "
+                      f"경과 {now - started:.1f}초", flush=True)
+                last_report = now
+
+        model = ItemBasedCF(top_k=args.top_k, batch_size=args.batch_size, progress=report)
         print(f"실제 데이터 학습 시작: {dataset.counts.shape}, top_k={args.top_k}", flush=True)
         model.fit_matrix(dataset.counts)
+        elapsed = monotonic() - started
+        neighbors = model._neighbors
+        neighbor_bytes = sum(array.nbytes for array in (
+            neighbors.data, neighbors.indices, neighbors.indptr
+        ))
+        print(f"학습 완료: {elapsed:.1f}초, 이웃 {neighbors.nnz:,}개, "
+              f"이웃 CSR {neighbor_bytes / 1024 ** 2:.1f} MiB", flush=True)
         recommendations = model.recommend_by_index(args.user_idx, gamma=args.gamma)
     except (ValueError, OSError) as exc:
         parser.exit(1, f"실행 실패: {exc}\n")
@@ -36,6 +57,25 @@ def run_real_data(args, parser) -> None:
                 recommendation.score, recommendation.popularity,
             ])
     print(f"사용자 {args.user_idx}: 추천 {len(recommendations)}곡 저장 → {output}")
+    metrics = {
+        "num_users": dataset.counts.shape[0], "num_items": dataset.counts.shape[1],
+        "top_k": args.top_k, "batch_size": args.batch_size, "gamma": args.gamma,
+        "training_seconds": elapsed, "neighbor_count": neighbors.nnz,
+        "neighbor_csr_bytes": neighbor_bytes,
+        "user_idx": args.user_idx, "recommendation_count": len(recommendations),
+    }
+    try:
+        import resource
+
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_bytes = int(peak if sys.platform == "darwin" else peak * 1024)
+        metrics["process_peak_rss_bytes"] = peak_bytes
+        print(f"프로세스 최대 메모리: {peak_bytes / 1024 ** 2:.1f} MiB")
+    except ImportError:
+        metrics["process_peak_rss_bytes"] = None
+    metrics_path = output.with_name(output.stem + "_metrics.json")
+    metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"실행 측정값 저장 → {metrics_path}")
 
 
 def main() -> None:
