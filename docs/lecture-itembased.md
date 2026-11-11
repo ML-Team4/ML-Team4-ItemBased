@@ -63,7 +63,7 @@ print(result[0].item_idx, result[0].score)
 
 ```bash
 python -m item_based.evaluate --weighting log1p --gamma 0 \
-  --output-dir outputs/lecture_log_validation_baseline
+  --output-dir outputs/validation_k50_gamma0
 ```
 
 결과 JSON은 `algorithm="lecture-item-cf-v1"`, `weighting="log1p"`, `scoring="target-neighborhood weighted average"`를 기록한다. 강의 평점 예제용 raw 모드와 프로젝트의 log1p 모드를 혼동하지 않는다.

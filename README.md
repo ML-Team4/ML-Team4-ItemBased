@@ -34,7 +34,7 @@ cp .env.example .env
 ```
 
 ```dotenv
-DATA_DIR=data/
+DATA_DIR=data/raw
 ```
 
 `.env`에는 파일 경로만 저장합니다. 실제 데이터는 `data/` 안에 보관하며, `.env`와 데이터 파일은 Git에서 제외됩니다. `.env.example`에는 공유 가능한 예시 경로만 포함합니다. 이미 `.env`가 있다면 덮어쓰지 말고 경로만 확인하세요.
@@ -45,7 +45,7 @@ DATA_DIR=data/
 python -m pip install -r requirements.txt
 python -m item_based.data
 # 다른 위치를 직접 지정할 수도 있습니다.
-python -m item_based.data --data-dir data/
+python -m item_based.data --data-dir data/raw
 ```
 
 경로 우선순위는 `--data-dir` → 실행 환경의 `DATA_DIR` → 프로젝트 루트 `.env`의 `DATA_DIR`입니다. 상대 경로는 프로젝트 루트 기준입니다.
@@ -150,7 +150,7 @@ python -m unittest discover -s tests -v
 
 ```bash
 python -m item_based.evaluate --top-k 50 --weighting log1p --gamma 0 \
-  --output-dir outputs/lecture_log_validation_baseline
+  --output-dir outputs/validation_k50_gamma0
 ```
 
 `.env`의 `DATA_DIR` 또는 `--data-dir`을 사용합니다. 매 실행마다 최초 train만으로 모델을 학습하고, `validation_users.csv`의 전체 사용자와 `validation_targets.csv`의 정답을 사용합니다. 테스트 정답은 설정 선택에 사용하지 않습니다. 사용자별 추천 후보는 전체 train 카탈로그에서 해당 사용자의 원래 train 청취곡만 제외한 집합입니다.
@@ -182,4 +182,4 @@ python -m item_based.evaluate --top-k 50 --weighting log1p --gamma 0 \
 | 0점 추천 | 275개 |
 | 평가 시간 (학습 제외) | 4.3초 |
 
-사용자별 결과와 추천 CSV로 Recall@10·ARP를 독립 재계산해 일치함을 확인했습니다. 결과는 `outputs/lecture_log_validation_baseline/`에 저장했습니다. gamma=0의 보정 전 결과이며, 이후 검증 데이터로 K·gamma를 비교해 설정을 선택하고 최종 테스트를 진행합니다.
+사용자별 결과와 추천 CSV로 Recall@10·ARP를 독립 재계산해 일치함을 확인했습니다. 결과는 `outputs/validation_k50_gamma0/`에 저장했습니다. gamma=0의 보정 전 결과이며, 이후 검증 데이터로 K·gamma를 비교해 설정을 선택하고 최종 테스트를 진행합니다.

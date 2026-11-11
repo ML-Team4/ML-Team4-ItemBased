@@ -98,7 +98,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--gamma", type=float, default=0.0)
     parser.add_argument("--weighting", choices=("raw", "log1p"), default="log1p")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/lecture_log_validation_baseline"))
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/validation_k50_gamma0"))
     args = parser.parse_args()
     if args.top_k < 1 or args.batch_size < 1 or not 0 <= args.gamma <= 1:
         parser.error("top-k·batch-size는 양수, gamma는 0~1이어야 합니다.")
