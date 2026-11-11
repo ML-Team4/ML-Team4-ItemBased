@@ -3,3 +3,4 @@ pandas
 pyarrow
 scipy
 scikit-learn
+python-dotenv

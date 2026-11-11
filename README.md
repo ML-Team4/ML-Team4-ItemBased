@@ -33,14 +33,46 @@ cp .env.example .env
 ```
 
 ```dotenv
-DATA_DIR=data/raw
+DATA_DIR=data/
 ```
 
-`.env`에는 파일 경로만 저장합니다. 실제 데이터는 `data/` 안에 보관하며, `.env`와 `data/`의 데이터 파일은 Git에서 제외됩니다. 팀원과 공유하는 `.env.example`에는 예시 경로만 포함합니다. 실제 데이터 로더에서 이 설정을 읽는 기능은 다음 단계에서 연결합니다.
+`.env`에는 파일 경로만 저장합니다. 실제 데이터는 `data/` 안에 보관하며, `.env`와 데이터 파일은 Git에서 제외됩니다. `.env.example`에는 공유 가능한 예시 경로만 포함합니다. 이미 `.env`가 있다면 덮어쓰지 말고 경로만 확인하세요.
 
-팀에서 추출한 ListenBrainz Parquet 파일은 `data/raw/`에 둡니다. 계획서의 원본 컬럼은 `user_id`, `listened_at`, `artist_name`, `recording_name`입니다.
+전처리 저장소의 `datasets/listenbrainz-preprocessing.zip`을 풀고 CSV 7개가 있는 폴더를 지정합니다. 원본 재전처리나 시간 분할은 다시 하지 않습니다.
 
-실제 데이터 연결 시 전처리 결과를 `(user_id, track_id, listen_count)` 형태로 변환해 `ItemBasedCF.fit()`에 전달합니다. 사용자 ID와 트랙 ID는 문자열을 사용합니다. 트랙 ID는 정규화된 아티스트명과 곡명의 조합으로 식별합니다. 세부 포맷은 팀의 전처리 결과에 맞춥니다.
+```bash
+python -m pip install -r requirements.txt
+python -m item_based.data
+# 다른 위치를 직접 지정할 수도 있습니다.
+python -m item_based.data --data-dir data/
+```
+
+경로 우선순위는 `--data-dir` → 실행 환경의 `DATA_DIR` → 프로젝트 루트 `.env`의 `DATA_DIR`입니다. 상대 경로는 프로젝트 루트 기준입니다.
+
+| 파일 | 역할 |
+| --- | --- |
+| `train_interactions.csv` | `user_idx`, `item_idx`, `listen_count`로 학습 CSR 행렬 생성 |
+| `users.csv` | 공통 사용자 인덱스와 원본 ID |
+| `items.csv` | 공통 곡 인덱스, 곡명·아티스트명, `train_listener_count` |
+| `validation_users.csv`, `validation_targets.csv` | 검증 사용자와 정답 |
+| `test_users.csv`, `test_targets.csv` | 테스트 사용자와 정답 |
+
+로더는 UTF-8 BOM과 이름에 포함된 쉼표·개행을 처리하고, `NA`·`NULL` 문자열을 그대로 보존합니다. 공통 인덱스를 유지하며 원시 청취 횟수에 로그 변환을 적용하지 않습니다. 인덱스 범위, 중복 학습·정답 쌍, 학습 인기도, 평가 사용자와 정답 연결, 정답의 학습 이력 중복 및 추천 후보 10곡 조건을 검사합니다.
+
+배포 데이터의 예상 출력은 다음과 같습니다.
+
+```text
+학습 행렬: 5,000명 × 1,525,005곡
+학습 사용자·곡 쌍: 2,739,292
+학습 청취 횟수 합계: 6,623,584
+검증: 3,922명 / 정답 193,323쌍
+테스트: 3,852명 / 정답 201,203쌍
+공통 인덱스·인기도·평가 정답 검증 완료
+```
+
+코드에서는 `from item_based.data import load_dataset` 후 `load_dataset()`으로 불러옵니다. 반환값의 `counts`는 사용자 행 × 곡 열의 희소 행렬이고, `users`와 `items`의 행 번호는 공통 인덱스입니다. `validation`·`test`는 각각 `user_indices`와 정답 희소 행렬 `targets`를 제공합니다.
+
+현재 단계는 데이터 로딩과 검증까지입니다. 기존 `python -m item_based` 명령은 예제 데이터를 계속 사용하며, 실제 데이터 모델 학습과 평가는 다음 단계에서 연결합니다.
 
 | 구간 | 날짜 (2026년, 양끝 포함) | 용도 |
 | --- | --- | --- |
