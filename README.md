@@ -1,4 +1,4 @@
-# TuneFit · Item-Based CF
+# ML-Team4 Item-Based CF
 
 ListenBrainz 청취 이력으로 **사용자가 학습 기간에 듣지 않은 곡 10개**를 추천합니다. 곡 간 유사도를 이용해 추천 점수를 계산하고, 인기도 보정 전후의 정확도와 평균 추천 인기도를 비교합니다.
 
