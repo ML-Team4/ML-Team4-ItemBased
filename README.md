@@ -247,6 +247,36 @@ K=50의 이웃 저장 버퍼는 최대 약 588 MiB이며 입력·정규화 행�
 
 모든 결과는 `outputs/`에 저장하며 Git에서 제외됩니다.
 
+### 그래프와 실행 결과 출력
+
+저장된 검증·테스트 JSON을 읽어 발표·보고서용 출력물을 생성합니다. **데이터 로딩·학습·추천·평가는 다시 실행하지 않습니다.** Item-Based 결과만 사용하며 MF 비교 결과는 포함하지 않습니다.
+
+```bash
+python -m pip install -r requirements.txt
+python -m item_based.report
+```
+
+| 생성 파일 (`outputs/report/` 기준) | 내용 |
+| --- | --- |
+| `validation_k.png` | gamma=0에서 K별 Recall@10·ARP 비교 |
+| `validation_gamma.png` | K=20에서 gamma별 Recall@10·ARP 비교 |
+| `test_comparison.png` | 최종 테스트 보정 전후 비교 |
+| `execution_results.png` | 저장된 실행 결과를 이미지로 정리한 요약 |
+| `execution_results.txt` | 설정·지표·변화율·원본 결과 파일 경로 |
+| `results.csv` | 검증·테스트 결과를 모은 비교표 |
+
+이미지는 영어 표기, 200dpi PNG로 저장합니다. 그래프의 진한 막대는 선택된 설정 또는 보정 후 결과이며, 두 지표 모두 0부터 시작하는 별도 축으로 표시합니다. `execution_results.png`는 저장된 결과 요약을 렌더링한 이미지이며 원래 훈련 터미널의 스크린샷은 아닙니다. 텍스트 요약은 터미널에도 출력됩니다.
+
+경로를 직접 지정할 수도 있습니다.
+
+```bash
+python -m item_based.report --results-dir outputs --output-dir outputs/report
+```
+
+기본 비교 범위는 K=20·50·100, gamma=0·0.1·0.25입니다. `--k-values`, `--gammas`, `--selected-k`로 변경할 수 있으며 선택한 설정은 목록에 포함되어야 합니다. 필요한 결과가 없거나 파일에 기록된 설정·평가 조건이 다르면 오류로 처리합니다. 수치를 임의로 채우지 않습니다.
+
+### 평가 원본 파일
+
 | 경로 | 내용 |
 | --- | --- |
 | `validation_k20_gamma0/` | K=20·gamma=0 검증 |
@@ -287,6 +317,7 @@ CSV는 UTF-8 BOM으로 저장하며, 곡명의 쉼표·따옴표·개행은 CSV 
 | [model.py](item_based/model.py) | 로그 입력·코사인 이웃·가중평균·인기도 보정 |
 | [__main__.py](item_based/__main__.py) | 예제·실제 사용자 추천과 CSV 저장 |
 | [evaluate.py](item_based/evaluate.py) | 검증·테스트 평가와 보정 전후 비교 |
+| [report.py](item_based/report.py) | 저장된 결과의 그래프·비교표·실행 결과 요약 생성 |
 | [tests/](tests/) | 계산·데이터 연결·평가 회귀 테스트 |
 
 ```bash

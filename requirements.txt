@@ -4,3 +4,4 @@ pyarrow
 scipy
 scikit-learn
 python-dotenv
+matplotlib
